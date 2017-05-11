@@ -1449,6 +1449,9 @@ AC_SUBST(LDFLAGS)
 AC_SUBST([ac_configure_args])
 AC_SUBST([EMPTY_VAR], [[]])
 
+AX_STRING_STRCASECMP
+AX_STRINGS_STRCASECMP
+
 AC_CONFIG_FILES([
 libmicrohttpd.pc
 w32/common/microhttpd_dll_res_vc.rc

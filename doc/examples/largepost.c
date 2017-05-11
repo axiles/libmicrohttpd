@@ -1,6 +1,9 @@
 /* Feel free to use this example code in any way
    you see fit (Public Domain) */
 
+/* Just used to make sure strcasecmp is available */
+#include "../../MHD_config.h"
+
 #include <sys/types.h>
 #ifndef _WIN32
 #include <sys/select.h>
@@ -13,11 +16,36 @@
 #include <string.h>
 #include <microhttpd.h>
 
-#ifdef _MSC_VER
-#ifndef strcasecmp
-#define strcasecmp(a,b) _stricmp((a),(b))
-#endif /* !strcasecmp */
-#endif /* _MSC_VER */
+#ifdef HAVE_STRING_STRCASECMP
+/* string.h already included */
+#elif defined(HAVE_STRINGS_STRCASECMP)
+# include <strings.h>
+#elif defined(_MSC_VER)
+# ifndef strcasecmp
+#  define strcasecmp(a,b) _stricmp((a),(b))
+# endif
+#else
+
+#include <ctype.h>
+int
+my_strcasecmp(const char *s1, const char *s2)
+{
+  const char *ptr1 = s1, *ptr2 = s2;
+  int c1, c2;
+  while(1) {
+    c1 = toupper(*ptr1);
+    c2 = toupper(*ptr2);
+    if(c1 < c2) return -1;
+    if(c1 > c2) return 1;
+    if(c1 == '\0' && c2 == '\0') return 0;
+    ptr1++;
+    ptr2++;
+  }
+}
+
+#define strcasecmp my_strcasecmp
+
+#endif    
 
 #if defined(_MSC_VER) && _MSC_VER+0 <= 1800
 /* Substitution is OK while return value is not used */
