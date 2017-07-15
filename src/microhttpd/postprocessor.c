@@ -753,7 +753,7 @@ static int
 process_value_to_boundary (struct MHD_PostProcessor *pp,
                            size_t *ioffptr,
                            const char *boundary,
-                           size_t blen,
+                           size_t blen MHD_UNUSED,
                            enum PP_State next_state,
                            enum PP_State next_dash_state)
 {

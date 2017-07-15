@@ -15,8 +15,8 @@
 
 
 static int
-print_out_key (void *cls, enum MHD_ValueKind kind, const char *key,
-               const char *value)
+print_out_key (void *cls MHD_UNUSED, enum MHD_ValueKind kind MHD_UNUSED,
+               const char *key, const char *value)
 {
   printf ("%s: %s\n", key, value);
   return MHD_YES;
@@ -24,10 +24,11 @@ print_out_key (void *cls, enum MHD_ValueKind kind, const char *key,
 
 
 static int
-answer_to_connection (void *cls, struct MHD_Connection *connection,
+answer_to_connection (void *cls MHD_UNUSED, struct MHD_Connection *connection,
                       const char *url, const char *method,
-                      const char *version, const char *upload_data,
-                      size_t *upload_data_size, void **con_cls)
+                      const char *version, const char *upload_data MHD_UNUSED,
+                      size_t *upload_data_size MHD_UNUSED,
+                      void **con_cls MHD_UNUSED)
 {
   printf ("New %s request for %s using version %s\n", method, url, version);
 

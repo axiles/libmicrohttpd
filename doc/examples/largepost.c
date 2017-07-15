@@ -145,13 +145,13 @@ send_page (struct MHD_Connection *connection,
 
 static int
 iterate_post (void *coninfo_cls,
-              enum MHD_ValueKind kind,
+              enum MHD_ValueKind kind MHD_UNUSED,
               const char *key,
               const char *filename,
-              const char *content_type,
-              const char *transfer_encoding,
+              const char *content_type MHD_UNUSED,
+              const char *transfer_encoding MHD_UNUSED,
               const char *data,
-              uint64_t off,
+              uint64_t off MHD_UNUSED,
               size_t size)
 {
   struct connection_info_struct *con_info = coninfo_cls;
@@ -200,10 +200,10 @@ iterate_post (void *coninfo_cls,
 
 
 static void
-request_completed (void *cls,
-                   struct MHD_Connection *connection,
+request_completed (void *cls MHD_UNUSED,
+                   struct MHD_Connection *connection MHD_UNUSED,
                    void **con_cls,
-                   enum MHD_RequestTerminationCode toe)
+                   enum MHD_RequestTerminationCode toe MHD_UNUSED)
 {
   struct connection_info_struct *con_info = *con_cls;
 
@@ -228,11 +228,11 @@ request_completed (void *cls,
 
 
 static int
-answer_to_connection (void *cls,
+answer_to_connection (void *cls MHD_UNUSED,
                       struct MHD_Connection *connection,
-                      const char *url,
+                      const char *url MHD_UNUSED,
                       const char *method,
-                      const char *version,
+                      const char *version MHD_UNUSED,
                       const char *upload_data,
                       size_t *upload_data_size,
                       void **con_cls)

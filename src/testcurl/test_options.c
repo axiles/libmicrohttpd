@@ -36,13 +36,14 @@ const char *test_file_name = "https_test_file";
 const char test_file_data[] = "Hello World\n";
 
 static int
-ahc_echo (void *cls,
-          struct MHD_Connection *connection,
-          const char *url,
-          const char *method,
-          const char *version,
-          const char *upload_data, size_t *upload_data_size,
-          void **unused)
+ahc_echo (void *cls MHD_UNUSED,
+          struct MHD_Connection *connection MHD_UNUSED,
+          const char *url MHD_UNUSED,
+          const char *method MHD_UNUSED,
+          const char *version MHD_UNUSED,
+          const char *upload_data MHD_UNUSED,
+          size_t *upload_data_size MHD_UNUSED,
+          void **unused MHD_UNUSED)
 {
   return 0;
 }
@@ -115,7 +116,7 @@ test_ip_addr_option ()
 
 /* setup a temporary transfer test file */
 int
-main (int argc, char *const *argv)
+main (void)
 {
   unsigned int errorCount = 0;
 

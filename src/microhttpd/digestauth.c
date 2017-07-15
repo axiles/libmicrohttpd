@@ -183,7 +183,7 @@ digest_calc_response (const char ha1[HASH_MD5_HEX_LEN + 1],
 		      const char *qop,
 		      const char *method,
 		      const char *uri,
-		      const char *hentity,
+		      const char *hentity MHD_UNUSED,
 		      char response[HASH_MD5_HEX_LEN + 1])
 {
   struct MD5Context md5;

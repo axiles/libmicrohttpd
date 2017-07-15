@@ -41,13 +41,13 @@
 #endif /* S_ISREG */
 
 static int
-ahc_echo (void *cls,
+ahc_echo (void *cls MHD_UNUSED,
           struct MHD_Connection *connection,
           const char *url,
           const char *method,
-          const char *version,
-          const char *upload_data,
-	  size_t *upload_data_size, void **ptr)
+          const char *version MHD_UNUSED,
+          const char *upload_data MHD_UNUSED,
+	  size_t *upload_data_size MHD_UNUSED, void **ptr)
 {
   static int aptr;
   struct MHD_Response *response;

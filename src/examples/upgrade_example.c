@@ -192,9 +192,9 @@ run_usock (void *cls)
  *        perform the close() action on the @a sock.
  */
 static void
-uh_cb (void *cls,
-       struct MHD_Connection *connection,
-       void *con_cls,
+uh_cb (void *cls MHD_UNUSED,
+       struct MHD_Connection *connection MHD_UNUSED,
+       void *con_cls MHD_UNUSED,
        const char *extra_in,
        size_t extra_in_size,
        MHD_socket sock,
@@ -237,13 +237,13 @@ uh_cb (void *cls,
 
 
 static int
-ahc_echo (void *cls,
+ahc_echo (void *cls MHD_UNUSED,
           struct MHD_Connection *connection,
-          const char *url,
+          const char *url MHD_UNUSED,
           const char *method,
-          const char *version,
-          const char *upload_data,
-          size_t *upload_data_size,
+          const char *version MHD_UNUSED,
+          const char *upload_data MHD_UNUSED,
+          size_t *upload_data_size MHD_UNUSED,
           void **ptr)
 {
   static int aptr;

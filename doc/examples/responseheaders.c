@@ -20,10 +20,12 @@
 #define MIMETYPE "image/png"
 
 static int
-answer_to_connection (void *cls, struct MHD_Connection *connection,
-                      const char *url, const char *method,
-                      const char *version, const char *upload_data,
-                      size_t *upload_data_size, void **con_cls)
+answer_to_connection (void *cls MHD_UNUSED, struct MHD_Connection *connection,
+                      const char *url MHD_UNUSED, const char *method,
+                      const char *version MHD_UNUSED,
+                      const char *upload_data MHD_UNUSED,
+                      size_t *upload_data_size MHD_UNUSED,
+                      void **con_cls MHD_UNUSED)
 {
   struct MHD_Response *response;
   int fd;

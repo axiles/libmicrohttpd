@@ -316,7 +316,7 @@ sendfile_adapter (struct MHD_Connection *connection)
  * @return #MHD_YES if force push is possible, #MHD_NO otherwise
  */
 static int
-socket_flush_possible(struct MHD_Connection *connection)
+socket_flush_possible(struct MHD_Connection *connection MHD_UNUSED)
 {
 #if defined(TCP_CORK) || defined(TCP_PUSH)
   return MHD_YES;

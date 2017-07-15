@@ -61,10 +61,10 @@ static struct MHD_Response *response;
  * @see MHD_OPTION_NOTIFY_COMPLETED
  */
 static void
-completed_callback (void *cls,
-		    struct MHD_Connection *connection,
+completed_callback (void *cls MHD_UNUSED,
+		    struct MHD_Connection *connection MHD_UNUSED,
 		    void **con_cls,
-		    enum MHD_RequestTerminationCode toe)
+		    enum MHD_RequestTerminationCode toe MHD_UNUSED)
 {
   struct timeval *tv = *con_cls;
   struct timeval tve;
@@ -90,8 +90,8 @@ completed_callback (void *cls,
 
 
 static void *
-uri_logger_cb (void *cls,
-	       const char *uri)
+uri_logger_cb (void *cls MHD_UNUSED,
+	       const char *uri MHD_UNUSED)
 {
   struct timeval *tv = malloc (sizeof (struct timeval));
 
@@ -102,12 +102,13 @@ uri_logger_cb (void *cls,
 
 
 static int
-ahc_echo (void *cls,
+ahc_echo (void *cls MHD_UNUSED,
           struct MHD_Connection *connection,
-          const char *url,
+          const char *url MHD_UNUSED,
           const char *method,
-          const char *version,
-          const char *upload_data, size_t *upload_data_size, void **ptr)
+          const char *version MHD_UNUSED,
+          const char *upload_data MHD_UNUSED,
+          size_t *upload_data_size MHD_UNUSED, void **ptr MHD_UNUSED)
 {
   if (0 != strcmp (method, "GET"))
     return MHD_NO;              /* unexpected method */

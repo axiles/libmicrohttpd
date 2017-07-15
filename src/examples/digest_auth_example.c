@@ -33,12 +33,14 @@
 #define MY_OPAQUE_STR "11733b200778ce33060f31c9af70a870ba96ddd4"
 
 static int
-ahc_echo (void *cls,
+ahc_echo (void *cls MHD_UNUSED,
           struct MHD_Connection *connection,
-          const char *url,
-          const char *method,
-          const char *version,
-          const char *upload_data, size_t *upload_data_size, void **ptr)
+          const char *url MHD_UNUSED,
+          const char *method MHD_UNUSED,
+          const char *version MHD_UNUSED,
+          const char *upload_data MHD_UNUSED,
+          size_t *upload_data_size MHD_UNUSED,
+          void **ptr MHD_UNUSED)
 {
   struct MHD_Response *response;
   char *username;

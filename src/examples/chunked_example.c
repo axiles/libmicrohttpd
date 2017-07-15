@@ -27,10 +27,10 @@
 
 
 static ssize_t
-callback (void *cls,
-          uint64_t pos,
-          char *buf,
-          size_t max)
+callback (void *cls MHD_UNUSED,
+          uint64_t pos MHD_UNUSED,
+          char *buf MHD_UNUSED,
+          size_t max MHD_UNUSED)
 {
   return MHD_CONTENT_READER_END_OF_STREAM;
 }
@@ -38,12 +38,13 @@ callback (void *cls,
 
 
 static int
-ahc_echo (void *cls,
+ahc_echo (void *cls MHD_UNUSED,
           struct MHD_Connection *connection,
-          const char *url,
+          const char *url MHD_UNUSED,
           const char *method,
-          const char *version,
-          const char *upload_data, size_t *upload_data_size, void **ptr)
+          const char *version MHD_UNUSED,
+          const char *upload_data MHD_UNUSED,
+          size_t *upload_data_size MHD_UNUSED, void **ptr)
 {
   static int aptr;
   struct MHD_Response *response;

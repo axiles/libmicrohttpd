@@ -3477,6 +3477,31 @@ enum MHD_FEATURE
 _MHD_EXTERN int
 MHD_is_feature_supported (enum MHD_FEATURE feature);
 
+/** Define the macro MHD_UNUSED:
+ * When using GCC with -Wextra (or -Wunused-parameter), a warning will be
+ * displayed when a parameter of a function is not used.
+ * Since we are using a lot of callbacks in the library it can happen often.
+ * The macro MHD_UNUSED will disable the warning for these cases.
+ * If we are not using GCC, then this macro is empty.
+ */
+#ifdef MHD_UNUSED
+# undef MHD_UNUSED
+#endif
+
+#ifdef __GNUC__
+
+# if __GNUC__ > 3 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 1)
+#  define MHD_UNUSED __attribute__ ((__unused__))
+# else
+#  define MHD_UNUSED
+# endif
+
+#else
+
+# define MHD_UNUSED
+
+#endif
+
 
 #if 0                           /* keep Emacsens' auto-indent happy */
 {

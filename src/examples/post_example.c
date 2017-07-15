@@ -307,7 +307,7 @@ serve_simple_form (const void *cls,
  * @param connection connection to use
  */
 static int
-fill_v1_form (const void *cls,
+fill_v1_form (const void *cls MHD_UNUSED,
 	      const char *mime,
 	      struct Session *session,
 	      struct MHD_Connection *connection)
@@ -350,7 +350,7 @@ fill_v1_form (const void *cls,
  * @param connection connection to use
  */
 static int
-fill_v1_v2_form (const void *cls,
+fill_v1_v2_form (const void *cls MHD_UNUSED,
 		 const char *mime,
 		 struct Session *session,
 		 struct MHD_Connection *connection)
@@ -394,9 +394,9 @@ fill_v1_v2_form (const void *cls,
  * @param connection connection to use
  */
 static int
-not_found_page (const void *cls,
+not_found_page (const void *cls MHD_UNUSED,
 		const char *mime,
-		struct Session *session,
+		struct Session *session MHD_UNUSED,
 		struct MHD_Connection *connection)
 {
   int ret;
@@ -454,11 +454,11 @@ static struct Page pages[] =
  */
 static int
 post_iterator (void *cls,
-	       enum MHD_ValueKind kind,
+	       enum MHD_ValueKind kind MHD_UNUSED,
 	       const char *key,
-	       const char *filename,
-	       const char *content_type,
-	       const char *transfer_encoding,
+	       const char *filename MHD_UNUSED,
+	       const char *content_type MHD_UNUSED,
+	       const char *transfer_encoding MHD_UNUSED,
 	       const char *data, uint64_t off, size_t size)
 {
   struct Request *request = cls;
@@ -534,11 +534,11 @@ post_iterator (void *cls,
  *         error while handling the request
  */
 static int
-create_response (void *cls,
+create_response (void *cls MHD_UNUSED,
 		 struct MHD_Connection *connection,
 		 const char *url,
 		 const char *method,
-		 const char *version,
+		 const char *version MHD_UNUSED,
 		 const char *upload_data,
 		 size_t *upload_data_size,
 		 void **ptr)
@@ -641,10 +641,10 @@ create_response (void *cls,
  * @param toe status code
  */
 static void
-request_completed_callback (void *cls,
-			    struct MHD_Connection *connection,
+request_completed_callback (void *cls MHD_UNUSED,
+			    struct MHD_Connection *connection MHD_UNUSED,
 			    void **con_cls,
-			    enum MHD_RequestTerminationCode toe)
+			    enum MHD_RequestTerminationCode toe MHD_UNUSED)
 {
   struct Request *request = *con_cls;
 

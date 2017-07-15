@@ -125,7 +125,7 @@ MHD_epoll (struct MHD_Daemon *daemon,
  * @param reason error message with details
  */
 static void
-mhd_panic_std (void *cls,
+mhd_panic_std (void *cls MHD_UNUSED,
 	       const char *file,
 	       unsigned int line,
 	       const char *reason)
@@ -4373,8 +4373,8 @@ MHD_select_thread (void *cls)
  *  shorter afterwards due to elimination of escape sequences)
  */
 static size_t
-unescape_wrapper (void *cls,
-                  struct MHD_Connection *connection,
+unescape_wrapper (void *cls MHD_UNUSED,
+                  struct MHD_Connection *connection MHD_UNUSED,
                   char *val)
 {
   return MHD_http_unescape (val);
