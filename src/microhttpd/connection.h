@@ -30,6 +30,36 @@
 
 #include "internal.h"
 
+/**
+ * Error code similar to EGAIN or EINTR
+ */
+#define MHD_ERR_AGAIN_ (-3073)
+
+/**
+ * "Connection (remote) reset" error code
+ */
+#define MHD_ERR_CONNRESET_ (-3074)
+
+/**
+ * "Not connected" error code
+ */
+#define MHD_ERR_NOTCONN_ (-3075)
+
+/**
+ * "Not enough memory" error code
+ */
+#define MHD_ERR_NOMEM_ (-3076)
+
+/**
+ * "Bad FD" error code
+ */
+#define MHD_ERR_BADF_ (-3077)
+
+/**
+ * Error code similar to EINVAL
+ */
+#define MHD_ERR_INVAL_ (-3078)
+
 
 /**
  * Set callbacks for this connection to those for HTTP.
@@ -47,10 +77,8 @@ MHD_set_http_callbacks_ (struct MHD_Connection *connection);
  * call this function to handle reads.
  *
  * @param connection connection to handle
- * @return always MHD_YES (we should continue to process the
- *         connection)
  */
-int
+void
 MHD_connection_handle_read (struct MHD_Connection *connection);
 
 
@@ -61,10 +89,8 @@ MHD_connection_handle_read (struct MHD_Connection *connection);
  * call this function
  *
  * @param connection connection to handle
- * @return always MHD_YES (we should continue to process the
- *         connection)
  */
-int
+void
 MHD_connection_handle_write (struct MHD_Connection *connection);
 
 

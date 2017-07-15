@@ -36,6 +36,9 @@
 #include "mhd_sockets.h"
 #include "mhd_compat.h"
 #include "mhd_itc.h"
+#ifdef __linux__
+#include <sys/sendfile.h>
+#endif
 #ifdef HTTPS_SUPPORT
 #include "connection_https.h"
 #endif /* HTTPS_SUPPORT */
@@ -107,6 +110,190 @@
  * Should all data send be printed to stderr?
  */
 #define DEBUG_SEND_DATA MHD_NO
+
+
+/**
+ * Callback for receiving data from the socket.
+ *
+ * @param connection the MHD connection structure
+ * @param other where to write received data to
+ * @param i maximum size of other (in bytes)
+ * @return positive value for number of bytes actually received or
+ *         negative value for error number MHD_ERR_xxx_
+ */
+static ssize_t
+recv_param_adapter (struct MHD_Connection *connection,
+                    void *other,
+                    size_t i)
+{
+  ssize_t ret;
+
+  if ( (MHD_INVALID_SOCKET == connection->socket_fd) ||
+       (MHD_CONNECTION_CLOSED == connection->state) )
+    {
+      return MHD_ERR_NOTCONN_;
+    }
+  if (i > MHD_SCKT_SEND_MAX_SIZE_)
+    i = MHD_SCKT_SEND_MAX_SIZE_; /* return value limit */
+
+  ret = MHD_recv_ (connection->socket_fd,
+                   other,
+                   i);
+  if (0 > ret)
+    {
+      const int err = MHD_socket_get_error_ ();
+      if (MHD_SCKT_ERR_IS_EAGAIN_ (err))
+        {
+#ifdef EPOLL_SUPPORT
+          /* Got EAGAIN --- no longer read-ready */
+          connection->epoll_state &= ~MHD_EPOLL_STATE_READ_READY;
+#endif /* EPOLL_SUPPORT */
+          return MHD_ERR_AGAIN_;
+        }
+      if (MHD_SCKT_ERR_IS_EINTR_ (err))
+        return MHD_ERR_AGAIN_;
+      /* Treat any other error as hard error. */
+      return MHD_ERR_CONNRESET_;
+    }
+#ifdef EPOLL_SUPPORT
+  else if (i > (size_t)ret)
+    connection->epoll_state &= ~MHD_EPOLL_STATE_READ_READY;
+#endif /* EPOLL_SUPPORT */
+  return ret;
+}
+
+
+/**
+ * Callback for writing data to the socket.
+ *
+ * @param connection the MHD connection structure
+ * @param other data to write
+ * @param i number of bytes to write
+ * @return positive value for number of bytes actually sent or
+ *         negative value for error number MHD_ERR_xxx_
+ */
+static ssize_t
+send_param_adapter (struct MHD_Connection *connection,
+                    const void *other,
+                    size_t i)
+{
+  ssize_t ret;
+
+  if ( (MHD_INVALID_SOCKET == connection->socket_fd) ||
+       (MHD_CONNECTION_CLOSED == connection->state) )
+    {
+      return MHD_ERR_NOTCONN_;
+    }
+  if (i > MHD_SCKT_SEND_MAX_SIZE_)
+    i = MHD_SCKT_SEND_MAX_SIZE_; /* return value limit */
+
+  ret = MHD_send_ (connection->socket_fd,
+                   other,
+                   i);
+  if (0 > ret)
+    {
+      const int err = MHD_socket_get_error_();
+
+      if (MHD_SCKT_ERR_IS_EAGAIN_(err))
+        {
+#ifdef EPOLL_SUPPORT
+          /* EAGAIN --- no longer write-ready */
+          connection->epoll_state &= ~MHD_EPOLL_STATE_WRITE_READY;
+#endif /* EPOLL_SUPPORT */
+          return MHD_ERR_AGAIN_;
+        }
+      if (MHD_SCKT_ERR_IS_EINTR_ (err))
+        return MHD_ERR_AGAIN_;
+      /* Treat any other error as hard error. */
+      return MHD_ERR_CONNRESET_;
+    }
+#ifdef EPOLL_SUPPORT
+  else if (i > (size_t)ret)
+    connection->epoll_state &= ~MHD_EPOLL_STATE_WRITE_READY;
+#endif /* EPOLL_SUPPORT */
+  return ret;
+}
+
+
+#ifdef __linux__
+/**
+ * Function for sending responses backed by file FD.
+ *
+ * @param connection the MHD connection structure
+ * @return actual number of bytes sent
+ */
+static ssize_t
+sendfile_adapter (struct MHD_Connection *connection)
+{
+  int ret;
+  const int file_fd = connection->response->fd;
+  uint64_t left;
+  uint64_t offsetu64;
+#ifndef HAVE_SENDFILE64
+  off_t offset;
+#else  /* HAVE_SENDFILE64 */
+  off64_t offset;
+#endif /* HAVE_SENDFILE64 */
+  mhd_assert (MHD_resp_sender_sendfile == connection->resp_sender);
+
+  offsetu64 = connection->response_write_position + connection->response->fd_off;
+  left = connection->response->total_size - connection->response_write_position;
+  if (left > SSIZE_MAX)
+    left = SSIZE_MAX;
+#ifndef HAVE_SENDFILE64
+  if ((uint64_t)OFF_T_MAX < offsetu64)
+    { /* Retry to send with standard 'send()'. */
+      connection->resp_sender = MHD_resp_sender_std;
+      return MHD_ERR_AGAIN_;
+    }
+    offset = (off_t) offsetu64;
+    ret = sendfile (connection->socket_fd,
+                    file_fd,
+                    &offset,
+                    left);
+#else  /* HAVE_SENDFILE64 */
+  if ((uint64_t)OFF64_T_MAX < offsetu64)
+    { /* Retry to send with standard 'send()'. */
+      connection->resp_sender = MHD_resp_sender_std;
+      return MHD_ERR_AGAIN_;
+    }
+    offset = (off64_t) offsetu64;
+    ret = sendfile64 (connection->socket_fd,
+                      file_fd,
+                      &offset,
+                      left);
+#endif /* HAVE_SENDFILE64 */
+  if (0 > ret)
+    {
+      const int err = MHD_socket_get_error_();
+      if (MHD_SCKT_ERR_IS_EAGAIN_(err))
+        {
+#ifdef EPOLL_SUPPORT
+          /* EAGAIN --- no longer write-ready */
+          connection->epoll_state &= ~MHD_EPOLL_STATE_WRITE_READY;
+#endif /* EPOLL_SUPPORT */
+          return MHD_ERR_AGAIN_;
+        }
+      if (MHD_SCKT_ERR_IS_EINTR_ (err))
+        return MHD_ERR_AGAIN_;
+      if (MHD_SCKT_ERR_IS_(err,
+                           MHD_SCKT_EBADF_))
+        return MHD_ERR_BADF_;
+      /* sendfile() failed with EINVAL if mmap()-like operations are not
+         supported for FD or other 'unusual' errors occurred, so we should try
+         to fall back to 'SEND'; see also this thread for info on
+         odd libc/Linux behavior with sendfile:
+         http://lists.gnu.org/archive/html/libmicrohttpd/2011-02/msg00015.html */
+      connection->resp_sender = MHD_resp_sender_std;
+      return MHD_ERR_AGAIN_;
+    }
+#ifdef EPOLL_SUPPORT
+  else if (left > (uint64_t)ret)
+        connection->epoll_state &= ~MHD_EPOLL_STATE_WRITE_READY;
+#endif /* EPOLL_SUPPORT */
+  return ret;
+}
+#endif /* __linux__ */
 
 
 /**
@@ -567,7 +754,7 @@ MHD_connection_mark_closed_ (struct MHD_Connection *connection)
        * remote side as end of transmission. */
       if (0 != (daemon->options & MHD_USE_TLS))
         {
-          if (MHD_NO == MHD_tls_connection_shutdown(connection))
+          if (! MHD_tls_connection_shutdown(connection))
             shutdown (connection->socket_fd,
                       SHUT_WR);
         }
@@ -878,8 +1065,8 @@ try_ready_chunked_body (struct MHD_Connection *connection)
                         sizeof (cbuf),
                         "%X\r\n",
                         (unsigned int) ret);
-  EXTRA_CHECK(cblen > 0);
-  EXTRA_CHECK(cblen < sizeof(cbuf));
+  mhd_assert(cblen > 0);
+  mhd_assert(cblen < sizeof(cbuf));
   memcpy (&connection->write_buffer[sizeof (cbuf) - cblen],
           cbuf,
           cblen);
@@ -926,13 +1113,8 @@ keepalive_possible (struct MHD_Connection *connection)
       if (MHD_lookup_header_s_token_ci (connection,
                                         MHD_HTTP_HEADER_CONNECTION,
                                         "upgrade"))
-        {
-#ifdef UPGRADE_SUPPORT
-           if ( (NULL == connection->response) ||
-                (NULL == connection->response->upgrade_handler) )
-#endif /* UPGRADE_SUPPORT */
-             return MHD_NO;
-        }
+        return MHD_NO;
+
       if (MHD_lookup_header_s_token_ci (connection,
                                         MHD_HTTP_HEADER_CONNECTION,
                                         "close"))
@@ -1077,7 +1259,7 @@ build_header_response (struct MHD_Connection *connection)
   int must_add_keep_alive;
   int must_add_content_length;
 
-  EXTRA_CHECK (NULL != connection->version);
+  mhd_assert (NULL != connection->version);
   if (0 == connection->version[0])
     {
       data = MHD_pool_allocate (connection->pool,
@@ -1205,6 +1387,9 @@ build_header_response (struct MHD_Connection *connection)
              (connection->read_closed) ||
              (MHD_CONN_MUST_CLOSE == connection->keepalive)) &&
            (! response_has_close) &&
+#ifdef UPGRADE_SUPPORT
+           (NULL == connection->response->upgrade_handler) &&
+#endif /* UPGRADE_SUPPORT */
            (0 == (connection->response->flags & MHD_RF_HTTP_VERSION_1_0_ONLY) ) )
         must_add_close = MHD_YES;
 
@@ -1262,7 +1447,7 @@ build_header_response (struct MHD_Connection *connection)
       response_has_keepalive = false;
       break;
     default:
-      EXTRA_CHECK (0);
+      mhd_assert (0);
     }
 
   if (MHD_CONN_MUST_CLOSE != connection->keepalive)
@@ -1281,8 +1466,8 @@ build_header_response (struct MHD_Connection *connection)
     size += MHD_STATICSTR_LEN_ ("Transfer-Encoding: chunked\r\n");
   if (must_add_content_length)
     size += content_length_len;
-  EXTRA_CHECK (! (must_add_close && must_add_keep_alive) );
-  EXTRA_CHECK (! (must_add_chunked_encoding && must_add_content_length) );
+  mhd_assert (! (must_add_close && must_add_keep_alive) );
+  mhd_assert (! (must_add_chunked_encoding && must_add_content_length) );
 
   for (pos = connection->response->first_header; NULL != pos; pos = pos->next)
     {
@@ -1427,7 +1612,7 @@ transmit_error_response (struct MHD_Connection *connection,
   MHD_queue_response (connection,
                       status_code,
                       response);
-  EXTRA_CHECK (NULL != connection->response);
+  mhd_assert (NULL != connection->response);
   MHD_destroy_response (response);
   /* Do not reuse this connection. */
   connection->keepalive = MHD_CONN_MUST_CLOSE;
@@ -1455,6 +1640,28 @@ transmit_error_response (struct MHD_Connection *connection,
 static void
 MHD_connection_update_event_loop_info (struct MHD_Connection *connection)
 {
+  /* Do not update states of suspended connection */
+  if (connection->suspended)
+    return; /* States will be updated after resume. */
+#ifdef HTTPS_SUPPORT
+  if (MHD_TLS_CONN_NO_TLS != connection->tls_state)
+    { /* HTTPS connection. */
+      switch (connection->tls_state)
+        {
+          case MHD_TLS_CONN_INIT:
+            connection->event_loop_info = MHD_EVENT_LOOP_INFO_READ;
+            return;
+          case MHD_TLS_CONN_HANDSHAKING:
+            if (0 == gnutls_record_get_direction (connection->tls_session))
+              connection->event_loop_info = MHD_EVENT_LOOP_INFO_READ;
+            else
+              connection->event_loop_info = MHD_EVENT_LOOP_INFO_WRITE;
+            return;
+          default:
+            break;
+        }
+    }
+#endif /* HTTPS_SUPPORT */
   while (1)
     {
 #if DEBUG_STATES
@@ -1465,14 +1672,6 @@ MHD_connection_update_event_loop_info (struct MHD_Connection *connection)
 #endif
       switch (connection->state)
         {
-#ifdef HTTPS_SUPPORT
-	case MHD_TLS_CONNECTION_INIT:
-	  if (0 == gnutls_record_get_direction (connection->tls_session))
-            connection->event_loop_info = MHD_EVENT_LOOP_INFO_READ;
-	  else
-            connection->event_loop_info = MHD_EVENT_LOOP_INFO_WRITE;
-	  break;
-#endif /* HTTPS_SUPPORT */
         case MHD_CONNECTION_INIT:
         case MHD_CONNECTION_URL_RECEIVED:
         case MHD_CONNECTION_HEADER_PART_RECEIVED:
@@ -1494,10 +1693,10 @@ MHD_connection_update_event_loop_info (struct MHD_Connection *connection)
 	    connection->event_loop_info = MHD_EVENT_LOOP_INFO_BLOCK;
           break;
         case MHD_CONNECTION_HEADERS_RECEIVED:
-          EXTRA_CHECK (0);
+          mhd_assert (0);
           break;
         case MHD_CONNECTION_HEADERS_PROCESSED:
-          EXTRA_CHECK (0);
+          mhd_assert (0);
           break;
         case MHD_CONNECTION_CONTINUE_SENDING:
           connection->event_loop_info = MHD_EVENT_LOOP_INFO_WRITE;
@@ -1507,9 +1706,7 @@ MHD_connection_update_event_loop_info (struct MHD_Connection *connection)
             {
               if ((MHD_YES != try_grow_read_buffer (connection)) &&
                   (0 != (connection->daemon->options &
-                         MHD_USE_INTERNAL_POLLING_THREAD)) &&
-                  (! connection->suspended) &&
-                  (! connection->resuming))
+                         MHD_USE_INTERNAL_POLLING_THREAD)))
                 {
                   /* failed to grow the read buffer, and the
                      client which is supposed to handle the
@@ -1522,8 +1719,6 @@ MHD_connection_update_event_loop_info (struct MHD_Connection *connection)
                      on the connection (if a timeout is even
                      set!).
                      Solution: we kill the connection with an error */
-                  /* If connection is suspended, give application one
-                   * more chance to read data once connection is resumed. */
                   transmit_error_response (connection,
                                            MHD_HTTP_INTERNAL_SERVER_ERROR,
                                            INTERNAL_ERROR);
@@ -1558,7 +1753,7 @@ MHD_connection_update_event_loop_info (struct MHD_Connection *connection)
 	  connection->event_loop_info = MHD_EVENT_LOOP_INFO_WRITE;
           break;
         case MHD_CONNECTION_HEADERS_SENT:
-          EXTRA_CHECK (0);
+          mhd_assert (0);
           break;
         case MHD_CONNECTION_NORMAL_BODY_READY:
 	  connection->event_loop_info = MHD_EVENT_LOOP_INFO_WRITE;
@@ -1573,19 +1768,27 @@ MHD_connection_update_event_loop_info (struct MHD_Connection *connection)
 	  connection->event_loop_info = MHD_EVENT_LOOP_INFO_BLOCK;
           break;
         case MHD_CONNECTION_BODY_SENT:
-          EXTRA_CHECK (0);
+          mhd_assert (0);
           break;
         case MHD_CONNECTION_FOOTERS_SENDING:
 	  connection->event_loop_info = MHD_EVENT_LOOP_INFO_WRITE;
           break;
         case MHD_CONNECTION_FOOTERS_SENT:
-          EXTRA_CHECK (0);
+          mhd_assert (0);
           break;
         case MHD_CONNECTION_CLOSED:
 	  connection->event_loop_info = MHD_EVENT_LOOP_INFO_CLEANUP;
           return;       /* do nothing, not even reading */
+        case MHD_CONNECTION_IN_CLEANUP:
+          mhd_assert (0);
+          break;
+#ifdef UPGRADE_SUPPORT
+        case MHD_CONNECTION_UPGRADE:
+          mhd_assert (0);
+          break;
+#endif /* UPGRADE_SUPPORT */
         default:
-          EXTRA_CHECK (0);
+          mhd_assert (0);
         }
       break;
     }
@@ -1942,13 +2145,8 @@ call_connection_handler (struct MHD_Connection *connection)
 static void
 process_request_body (struct MHD_Connection *connection)
 {
-  uint64_t processed;
   size_t available;
-  size_t used;
-  size_t i;
-  size_t end_size;
   int instant_retry;
-  int malformed;
   char *buffer_head;
 
   if (NULL != connection->response)
@@ -1958,6 +2156,10 @@ process_request_body (struct MHD_Connection *connection)
   available = connection->read_buffer_offset;
   do
     {
+      size_t to_be_processed;
+      size_t left_unprocessed;
+      size_t processed_size;
+
       instant_retry = MHD_NO;
       if ( (connection->have_chunked_upload) &&
            (MHD_SIZE_UNKNOWN == connection->remaining_upload_size) )
@@ -1966,6 +2168,7 @@ process_request_body (struct MHD_Connection *connection)
                (0LLU != connection->current_chunk_offset) &&
                (available >= 2) )
             {
+              size_t i;
               /* skip new line at the *end* of a chunk */
               i = 0;
               if ( ('\r' == buffer_head[i]) ||
@@ -1989,18 +2192,27 @@ process_request_body (struct MHD_Connection *connection)
           if (connection->current_chunk_offset <
               connection->current_chunk_size)
             {
+              uint64_t cur_chunk_left;
               /* we are in the middle of a chunk, give
                  as much as possible to the client (without
                  crossing chunk boundaries) */
-              processed
+              cur_chunk_left
                 = connection->current_chunk_size - connection->current_chunk_offset;
-              if (processed > available)
-                processed = available;
-              if (available > processed)
-                instant_retry = MHD_YES;
+              if (cur_chunk_left > available)
+                to_be_processed = available;
+              else
+                { /* cur_chunk_left <= (size_t)available */
+                  to_be_processed = (size_t)cur_chunk_left;
+                  if (available > to_be_processed)
+                    instant_retry = MHD_YES;
+                }
             }
           else
             {
+              size_t i;
+              size_t end_size;
+              bool malformed;
+
               /* we need to read chunk boundaries */
               i = 0;
               while (i < available)
@@ -2076,7 +2288,7 @@ process_request_body (struct MHD_Connection *connection)
 	       (MHD_SIZE_UNKNOWN != connection->remaining_upload_size) &&
 	       (connection->remaining_upload_size < available) )
 	    {
-              processed = (size_t)connection->remaining_upload_size;
+              to_be_processed = (size_t)connection->remaining_upload_size;
 	    }
           else
 	    {
@@ -2084,35 +2296,27 @@ process_request_body (struct MHD_Connection *connection)
                * 1. no chunked encoding, give all to the client
                * 2. client may send large chunked data, but only a smaller part is available at one time.
                */
-              processed = available;
+              to_be_processed = available;
 	    }
         }
-      used = processed;
+      left_unprocessed = to_be_processed;
       connection->client_aware = true;
-      {
-        size_t processed_st;
-        if (processed > SIZE_MAX)
-          processed_st = SIZE_MAX;
-        else
-          processed_st = (size_t) processed;
-        if (MHD_NO ==
-            connection->daemon->default_handler (connection->daemon->default_handler_cls,
-                                                 connection,
-                                                 connection->url,
-                                                 connection->method,
-                                                 connection->version,
-                                                 buffer_head,
-                                                 &processed_st,
-                                                 &connection->client_context))
+      if (MHD_NO ==
+          connection->daemon->default_handler (connection->daemon->default_handler_cls,
+                                               connection,
+                                               connection->url,
+                                               connection->method,
+                                               connection->version,
+                                               buffer_head,
+                                               &left_unprocessed,
+                                               &connection->client_context))
         {
           /* serious internal error, close connection */
-	  CONNECTION_CLOSE_ERROR (connection,
+          CONNECTION_CLOSE_ERROR (connection,
                                   _("Application reported internal error, closing connection.\n"));
           return;
         }
-        processed = (uint64_t) processed_st;
-      }
-      if (processed > (uint64_t)used)
+      if (left_unprocessed > to_be_processed)
         mhd_panic (mhd_panic_cls,
                    __FILE__,
                    __LINE__
@@ -2122,27 +2326,27 @@ process_request_body (struct MHD_Connection *connection)
 		   , NULL
 #endif
 		   );
-      if (0 != processed)
+      if (0 != left_unprocessed)
 	{
 	  instant_retry = MHD_NO; /* client did not process everything */
 #ifdef HAVE_MESSAGES
-	  /* client did not process all POST data, complain if
+	  /* client did not process all upload data, complain if
 	     the setup was incorrect, which may prevent us from
 	     handling the rest of the request */
 	  if ( (0 != (connection->daemon->options & MHD_USE_INTERNAL_POLLING_THREAD)) &&
 	       (! connection->suspended) )
 	    MHD_DLOG (connection->daemon,
-		      _("WARNING: incomplete POST processing and connection not suspended will result in hung connection.\n"));
+		      _("WARNING: incomplete upload processing and connection not suspended may result in hung connection.\n"));
 #endif
 	}
-      used -= (size_t)processed; /* 'processed' is less than SIZE_MAX */
+      processed_size = to_be_processed - left_unprocessed;
       if (connection->have_chunked_upload)
-        connection->current_chunk_offset += used;
+        connection->current_chunk_offset += processed_size;
       /* dh left "processed" bytes in buffer for next time... */
-      buffer_head += used;
-      available -= used;
+      buffer_head += processed_size;
+      available -= processed_size;
       if (MHD_SIZE_UNKNOWN != connection->remaining_upload_size)
-        connection->remaining_upload_size -= used;
+        connection->remaining_upload_size -= processed_size;
     }
   while (MHD_YES == instant_retry);
   if (available > 0)
@@ -2150,101 +2354,6 @@ process_request_body (struct MHD_Connection *connection)
              buffer_head,
              available);
   connection->read_buffer_offset = available;
-}
-
-
-/**
- * Try reading data from the socket into the read buffer of the
- * connection.
- *
- * @param connection connection we're processing
- * @return #MHD_YES if something changed,
- *         #MHD_NO if we were interrupted or if
- *                no space was available
- */
-static int
-do_read (struct MHD_Connection *connection)
-{
-  ssize_t bytes_read;
-
-  if (connection->read_buffer_size == connection->read_buffer_offset)
-    return MHD_NO;
-  bytes_read = connection->recv_cls (connection,
-                                     &connection->read_buffer
-                                     [connection->read_buffer_offset],
-                                     connection->read_buffer_size -
-                                     connection->read_buffer_offset);
-  if (bytes_read < 0)
-    {
-      const int err = MHD_socket_get_error_ ();
-      if (MHD_SCKT_ERR_IS_EINTR_ (err) ||
-          MHD_SCKT_ERR_IS_EAGAIN_ (err))
-	  return MHD_NO;
-      if (MHD_SCKT_ERR_IS_REMOTE_DISCNN_ (err))
-        {
-           CONNECTION_CLOSE_ERROR (connection,
-                                   NULL);
-	   return MHD_NO;
-	}
-      CONNECTION_CLOSE_ERROR (connection,
-                              NULL);
-      return MHD_YES;
-    }
-  if (0 == bytes_read)
-    {
-      /* other side closed connection; RFC 2616, section 8.1.4 suggests
-	 we should then shutdown ourselves as well. */
-      connection->read_closed = true;
-      MHD_connection_close_ (connection,
-                             MHD_REQUEST_TERMINATED_CLIENT_ABORT);
-      return MHD_YES;
-    }
-  connection->read_buffer_offset += bytes_read;
-  return MHD_YES;
-}
-
-
-/**
- * Try writing data to the socket from the
- * write buffer of the connection.
- *
- * @param connection connection we're processing
- * @return #MHD_YES if something changed,
- *         #MHD_NO if we were interrupted
- */
-static int
-do_write (struct MHD_Connection *connection)
-{
-  ssize_t ret;
-  size_t max;
-
-  max = connection->write_buffer_append_offset - connection->write_buffer_send_offset;
-  ret = connection->send_cls (connection,
-                              &connection->write_buffer
-                              [connection->write_buffer_send_offset],
-                              max);
-
-  if (ret < 0)
-    {
-      const int err = MHD_socket_get_error_ ();
-      if (MHD_SCKT_ERR_IS_EINTR_ (err) ||
-          MHD_SCKT_ERR_IS_EAGAIN_ (err))
-        return MHD_NO;
-      CONNECTION_CLOSE_ERROR (connection,
-                              NULL);
-      return MHD_YES;
-    }
-#if DEBUG_SEND_DATA
-  fprintf (stderr,
-           _("Sent response: `%.*s'\n"),
-           ret,
-           &connection->write_buffer[connection->write_buffer_send_offset]);
-#endif
-  /* only increment if this wasn't a "sendfile" transmission without
-     buffer involvement! */
-  if (0 != max)
-    connection->write_buffer_send_offset += ret;
-  return MHD_YES;
 }
 
 
@@ -2391,7 +2500,7 @@ process_broken_line (struct MHD_Connection *connection,
       connection->last = last;
       return MHD_YES;           /* possibly more than 2 lines... */
     }
-  EXTRA_CHECK ( (NULL != last) &&
+  mhd_assert ( (NULL != last) &&
                 (NULL != connection->colon) );
   if ((MHD_NO == connection_add_header (connection,
                                         last,
@@ -2451,7 +2560,7 @@ parse_connection_headers (struct MHD_Connection *connection)
       MHD_DLOG (connection->daemon,
                 _("Received HTTP 1.1 request without `Host' header.\n"));
 #endif
-      EXTRA_CHECK (NULL == connection->response);
+      mhd_assert (NULL == connection->response);
       response =
         MHD_create_response_from_buffer (MHD_STATICSTR_LEN_ (REQUEST_LACKS_HOST),
 					 REQUEST_LACKS_HOST,
@@ -2542,68 +2651,107 @@ MHD_update_last_activity_ (struct MHD_Connection *connection)
  * determined that there is data to be read off a socket.
  *
  * @param connection connection to handle
- * @return always #MHD_YES (we should continue to process the
- *         connection)
  */
-int
+void
 MHD_connection_handle_read (struct MHD_Connection *connection)
 {
+  ssize_t bytes_read;
+
   if ( (MHD_CONNECTION_CLOSED == connection->state) ||
        (connection->suspended) )
-    return MHD_YES;
+    return;
+#ifdef HTTPS_SUPPORT
+  if (MHD_TLS_CONN_NO_TLS != connection->tls_state)
+    { /* HTTPS connection. */
+      if (MHD_TLS_CONN_CONNECTED > connection->tls_state)
+        {
+          if (!MHD_run_tls_handshake_ (connection))
+            return;
+        }
+    }
+#endif /* HTTPS_SUPPORT */
+
   /* make sure "read" has a reasonable number of bytes
      in buffer to use per system call (if possible) */
   if (connection->read_buffer_offset + connection->daemon->pool_increment >
       connection->read_buffer_size)
     try_grow_read_buffer (connection);
-  if (MHD_NO == do_read (connection))
-    return MHD_YES;
-  MHD_update_last_activity_ (connection);
-  while (1)
+
+  if (connection->read_buffer_size == connection->read_buffer_offset)
+    return; /* No space for receiving data. */
+  bytes_read = connection->recv_cls (connection,
+                                     &connection->read_buffer
+                                     [connection->read_buffer_offset],
+                                     connection->read_buffer_size -
+                                     connection->read_buffer_offset);
+  if (bytes_read < 0)
     {
-#if DEBUG_STATES
-      MHD_DLOG (connection->daemon,
-                _("In function %s handling connection at state: %s\n"),
-                __FUNCTION__,
-                MHD_state_to_string (connection->state));
-#endif
-      switch (connection->state)
+      if (MHD_ERR_AGAIN_ == bytes_read)
+          return; /* No new data to process. */
+      if (MHD_ERR_CONNRESET_ == bytes_read)
         {
-        case MHD_CONNECTION_INIT:
-        case MHD_CONNECTION_URL_RECEIVED:
-        case MHD_CONNECTION_HEADER_PART_RECEIVED:
-        case MHD_CONNECTION_HEADERS_RECEIVED:
-        case MHD_CONNECTION_HEADERS_PROCESSED:
-        case MHD_CONNECTION_CONTINUE_SENDING:
-        case MHD_CONNECTION_CONTINUE_SENT:
-        case MHD_CONNECTION_BODY_RECEIVED:
-        case MHD_CONNECTION_FOOTER_PART_RECEIVED:
-          /* nothing to do but default action */
-          if (connection->read_closed)
-            {
-	      MHD_connection_close_ (connection,
-                                     MHD_REQUEST_TERMINATED_READ_ERROR);
-              continue;
-            }
-          break;
-        case MHD_CONNECTION_CLOSED:
-          return MHD_YES;
-#ifdef UPGRADE_SUPPORT
-        case MHD_CONNECTION_UPGRADE:
-          EXTRA_CHECK (0);
-          break;
-#endif /* UPGRADE_SUPPORT */
-        default:
-          /* shrink read buffer to how much is actually used */
-          MHD_pool_reallocate (connection->pool,
-                               connection->read_buffer,
-                               connection->read_buffer_size + 1,
-                               connection->read_buffer_offset);
-          break;
+           CONNECTION_CLOSE_ERROR (connection,
+                                   (MHD_CONNECTION_INIT == connection->state) ?
+                                     NULL :
+                                     _("Socket is unexpectedly disconnected when reading request.\n"));
+           return;
         }
+      CONNECTION_CLOSE_ERROR (connection,
+                              (MHD_CONNECTION_INIT == connection->state) ?
+                                NULL :
+                                _("Connection socket is closed due to unexpected error when reading request.\n"));
+      return;
+    }
+
+  if (0 == bytes_read)
+    { /* Remote side closed connection. */
+      connection->read_closed = true;
+      MHD_connection_close_ (connection,
+                             MHD_REQUEST_TERMINATED_CLIENT_ABORT);
+      return;
+    }
+  connection->read_buffer_offset += bytes_read;
+  MHD_update_last_activity_ (connection);
+#if DEBUG_STATES
+  MHD_DLOG (connection->daemon,
+            _("In function %s handling connection at state: %s\n"),
+            __FUNCTION__,
+            MHD_state_to_string (connection->state));
+#endif
+  switch (connection->state)
+    {
+    case MHD_CONNECTION_INIT:
+    case MHD_CONNECTION_URL_RECEIVED:
+    case MHD_CONNECTION_HEADER_PART_RECEIVED:
+    case MHD_CONNECTION_HEADERS_RECEIVED:
+    case MHD_CONNECTION_HEADERS_PROCESSED:
+    case MHD_CONNECTION_CONTINUE_SENDING:
+    case MHD_CONNECTION_CONTINUE_SENT:
+    case MHD_CONNECTION_BODY_RECEIVED:
+    case MHD_CONNECTION_FOOTER_PART_RECEIVED:
+      /* nothing to do but default action */
+      if (connection->read_closed)
+        {
+          MHD_connection_close_ (connection,
+                                 MHD_REQUEST_TERMINATED_READ_ERROR);
+        }
+      return;
+    case MHD_CONNECTION_CLOSED:
+      return;
+#ifdef UPGRADE_SUPPORT
+    case MHD_CONNECTION_UPGRADE:
+      mhd_assert (0);
+      return;
+#endif /* UPGRADE_SUPPORT */
+    default:
+      /* shrink read buffer to how much is actually used */
+      MHD_pool_reallocate (connection->pool,
+                           connection->read_buffer,
+                           connection->read_buffer_size + 1,
+                           connection->read_buffer_offset);
       break;
     }
-  return MHD_YES;
+  return;
 }
 
 
@@ -2612,189 +2760,236 @@ MHD_connection_handle_read (struct MHD_Connection *connection)
  * been determined that the socket can be written to.
  *
  * @param connection connection to handle
- * @return always #MHD_YES (we should continue to process the
- *         connection)
  */
-int
+void
 MHD_connection_handle_write (struct MHD_Connection *connection)
 {
   struct MHD_Response *response;
   ssize_t ret;
   if (connection->suspended)
-    return MHD_YES;
+    return;
 
-  while (1)
-    {
-#if DEBUG_STATES
-      MHD_DLOG (connection->daemon,
-                _("In function %s handling connection at state: %s\n"),
-                __FUNCTION__,
-                MHD_state_to_string (connection->state));
-#endif
-      switch (connection->state)
+#ifdef HTTPS_SUPPORT
+  if (MHD_TLS_CONN_NO_TLS != connection->tls_state)
+    { /* HTTPS connection. */
+      if (MHD_TLS_CONN_CONNECTED > connection->tls_state)
         {
-        case MHD_CONNECTION_INIT:
-        case MHD_CONNECTION_URL_RECEIVED:
-        case MHD_CONNECTION_HEADER_PART_RECEIVED:
-        case MHD_CONNECTION_HEADERS_RECEIVED:
-          EXTRA_CHECK (0);
-          break;
-        case MHD_CONNECTION_HEADERS_PROCESSED:
-          break;
-        case MHD_CONNECTION_CONTINUE_SENDING:
-          ret = connection->send_cls (connection,
-                                      &HTTP_100_CONTINUE
-                                      [connection->continue_message_write_offset],
-                                      MHD_STATICSTR_LEN_ (HTTP_100_CONTINUE) -
-                                      connection->continue_message_write_offset);
+          if (!MHD_run_tls_handshake_ (connection))
+            return;
+        }
+    }
+#endif /* HTTPS_SUPPORT */
+
+#if DEBUG_STATES
+  MHD_DLOG (connection->daemon,
+            _("In function %s handling connection at state: %s\n"),
+            __FUNCTION__,
+            MHD_state_to_string (connection->state));
+#endif
+  switch (connection->state)
+    {
+    case MHD_CONNECTION_INIT:
+    case MHD_CONNECTION_URL_RECEIVED:
+    case MHD_CONNECTION_HEADER_PART_RECEIVED:
+    case MHD_CONNECTION_HEADERS_RECEIVED:
+      mhd_assert (0);
+      return;
+    case MHD_CONNECTION_HEADERS_PROCESSED:
+      return;
+    case MHD_CONNECTION_CONTINUE_SENDING:
+      ret = connection->send_cls (connection,
+                                  &HTTP_100_CONTINUE
+                                  [connection->continue_message_write_offset],
+                                  MHD_STATICSTR_LEN_ (HTTP_100_CONTINUE) -
+                                  connection->continue_message_write_offset);
+      if (ret < 0)
+        {
+          if (MHD_ERR_AGAIN_ == ret)
+            return;
+#ifdef HAVE_MESSAGES
+          MHD_DLOG (connection->daemon,
+                    _("Failed to send data in request for %s.\n"),
+                    connection->url);
+#endif
+          CONNECTION_CLOSE_ERROR (connection,
+                                  NULL);
+          return;
+        }
+#if DEBUG_SEND_DATA
+      fprintf (stderr,
+               _("Sent 100 continue response: `%.*s'\n"),
+               (int) ret,
+               &HTTP_100_CONTINUE[connection->continue_message_write_offset]);
+#endif
+      connection->continue_message_write_offset += ret;
+      MHD_update_last_activity_ (connection);
+      return;
+    case MHD_CONNECTION_CONTINUE_SENT:
+    case MHD_CONNECTION_BODY_RECEIVED:
+    case MHD_CONNECTION_FOOTER_PART_RECEIVED:
+    case MHD_CONNECTION_FOOTERS_RECEIVED:
+      mhd_assert (0);
+      return;
+    case MHD_CONNECTION_HEADERS_SENDING:
+      ret = connection->send_cls (connection,
+                                  &connection->write_buffer
+                                  [connection->write_buffer_send_offset],
+                                  connection->write_buffer_append_offset -
+                                    connection->write_buffer_send_offset);
+      if (ret < 0)
+        {
+          if (MHD_ERR_AGAIN_ == ret)
+            return;
+          CONNECTION_CLOSE_ERROR (connection,
+                                  _("Connection was closed while sending response headers.\n"));
+          return;
+        }
+      connection->write_buffer_send_offset += ret;
+      MHD_update_last_activity_ (connection);
+      if (MHD_CONNECTION_HEADERS_SENDING != connection->state)
+        return;
+      check_write_done (connection,
+                        MHD_CONNECTION_HEADERS_SENT);
+      return;
+    case MHD_CONNECTION_HEADERS_SENT:
+      return;
+    case MHD_CONNECTION_NORMAL_BODY_READY:
+      response = connection->response;
+      if (connection->response_write_position <
+          connection->response->total_size)
+        {
+          uint64_t data_write_offset;
+
+          if (NULL != response->crc)
+            MHD_mutex_lock_chk_ (&response->mutex);
+          if (MHD_YES != try_ready_normal_body (connection))
+            {
+              /* mutex was already unlocked by try_ready_normal_body */
+              return;
+            }
+#ifdef __linux__
+          if (MHD_resp_sender_sendfile == connection->resp_sender)
+            {
+              ret = sendfile_adapter (connection);
+            }
+          else
+#else  /* ! __linux__ */
+          if (1)
+#endif /* ! __linux__ */
+            {
+              data_write_offset = connection->response_write_position
+                                  - response->data_start;
+              if (data_write_offset > (uint64_t)SIZE_MAX)
+                MHD_PANIC (_("Data offset exceeds limit"));
+              ret = connection->send_cls (connection,
+                                          &response->data
+                                          [(size_t)data_write_offset],
+                                          response->data_size -
+                                          (size_t)data_write_offset);
+#if DEBUG_SEND_DATA
+              if (ret > 0)
+                fprintf (stderr,
+                         _("Sent %d-byte DATA response: `%.*s'\n"),
+                         (int) ret,
+                         (int) ret,
+                         &response->data[connection->response_write_position -
+                                         response->data_start]);
+#endif
+            }
+          if (NULL != response->crc)
+            MHD_mutex_unlock_chk_ (&response->mutex);
           if (ret < 0)
             {
-              const int err = MHD_socket_get_error_ ();
-
-              if (MHD_SCKT_ERR_IS_EINTR_ (err) ||
-                  MHD_SCKT_ERR_IS_EAGAIN_ (err))
-                break;
+              if (MHD_ERR_AGAIN_ == ret)
+                return;
 #ifdef HAVE_MESSAGES
               MHD_DLOG (connection->daemon,
-                        _("Failed to send data in request for %s: %s\n"),
-                        connection->url,
-                        MHD_socket_strerr_ (err));
+                        _("Failed to send data in request for `%s'.\n"),
+                        connection->url);
 #endif
-	      CONNECTION_CLOSE_ERROR (connection,
+              CONNECTION_CLOSE_ERROR (connection,
                                       NULL);
-              return MHD_YES;
+              return;
             }
-#if DEBUG_SEND_DATA
-          fprintf (stderr,
-                   _("Sent 100 continue response: `%.*s'\n"),
-                   (int) ret,
-                   &HTTP_100_CONTINUE[connection->continue_message_write_offset]);
-#endif
-          connection->continue_message_write_offset += ret;
+          connection->response_write_position += ret;
           MHD_update_last_activity_ (connection);
-          break;
-        case MHD_CONNECTION_CONTINUE_SENT:
-        case MHD_CONNECTION_BODY_RECEIVED:
-        case MHD_CONNECTION_FOOTER_PART_RECEIVED:
-        case MHD_CONNECTION_FOOTERS_RECEIVED:
-          EXTRA_CHECK (0);
-          break;
-        case MHD_CONNECTION_HEADERS_SENDING:
-          if (MHD_NO != do_write (connection))
-            MHD_update_last_activity_ (connection);
-	  if (MHD_CONNECTION_HEADERS_SENDING != connection->state)
- 	     break;
-          check_write_done (connection,
-                            MHD_CONNECTION_HEADERS_SENT);
-          break;
-        case MHD_CONNECTION_HEADERS_SENT:
-          break;
-        case MHD_CONNECTION_NORMAL_BODY_READY:
-          response = connection->response;
-          if (connection->response_write_position <
-              connection->response->total_size)
-          {
-            int err;
-            uint64_t data_write_offset;
-
-            if (NULL != response->crc)
-              MHD_mutex_lock_chk_ (&response->mutex);
-            if (MHD_YES != try_ready_normal_body (connection))
-              {
-                /* mutex was already unlocked by try_ready_normal_body */
-                break;
-              }
-            data_write_offset = connection->response_write_position
-                                - response->data_start;
-            if (data_write_offset > (uint64_t)SIZE_MAX)
-              MHD_PANIC (_("Data offset exceeds limit"));
-            ret = connection->send_cls (connection,
-                                        &response->data
-                                        [(size_t)data_write_offset],
-                                        response->data_size -
-                                        (size_t)data_write_offset);
-#if DEBUG_SEND_DATA
-            if (ret > 0)
-              fprintf (stderr,
-                       _("Sent %d-byte DATA response: `%.*s'\n"),
-                       (int) ret,
-                       (int) ret,
-                       &response->data[connection->response_write_position -
-                                       response->data_start]);
-#endif
-            if (NULL != response->crc)
-              MHD_mutex_unlock_chk_ (&response->mutex);
-            if (ret < 0)
-              {
-                err = MHD_socket_get_error_ ();
-                if (MHD_SCKT_ERR_IS_EINTR_ (err) ||
-                    MHD_SCKT_ERR_IS_EAGAIN_ (err))
-                  return MHD_YES;
-#ifdef HAVE_MESSAGES
-                MHD_DLOG (connection->daemon,
-                          _("Failed to send data in request for `%s': %s\n"),
-                          connection->url,
-                          MHD_socket_strerr_ (err));
-#endif
-                CONNECTION_CLOSE_ERROR (connection,
-                                        NULL);
-                return MHD_YES;
-              }
-            connection->response_write_position += ret;
-            MHD_update_last_activity_ (connection);
-          }
-          if (connection->response_write_position ==
-              connection->response->total_size)
-            connection->state = MHD_CONNECTION_FOOTERS_SENT; /* have no footers */
-          break;
-        case MHD_CONNECTION_NORMAL_BODY_UNREADY:
-          EXTRA_CHECK (0);
-          break;
-        case MHD_CONNECTION_CHUNKED_BODY_READY:
-          if (MHD_NO != do_write (connection))
-            MHD_update_last_activity_ (connection);
-	  if (MHD_CONNECTION_CHUNKED_BODY_READY != connection->state)
-	     break;
-          check_write_done (connection,
-                            (connection->response->total_size ==
-                             connection->response_write_position) ?
-                            MHD_CONNECTION_BODY_SENT :
-                            MHD_CONNECTION_CHUNKED_BODY_UNREADY);
-          break;
-        case MHD_CONNECTION_CHUNKED_BODY_UNREADY:
-        case MHD_CONNECTION_BODY_SENT:
-          EXTRA_CHECK (0);
-          break;
-        case MHD_CONNECTION_FOOTERS_SENDING:
-          if (MHD_NO != do_write (connection))
-            MHD_update_last_activity_ (connection);
-	  if (MHD_CONNECTION_FOOTERS_SENDING != connection->state)
-	    break;
-          check_write_done (connection,
-                            MHD_CONNECTION_FOOTERS_SENT);
-          break;
-        case MHD_CONNECTION_FOOTERS_SENT:
-          EXTRA_CHECK (0);
-          break;
-        case MHD_CONNECTION_CLOSED:
-          return MHD_YES;
-        case MHD_TLS_CONNECTION_INIT:
-          EXTRA_CHECK (0);
-          break;
-#ifdef UPGRADE_SUPPORT
-        case MHD_CONNECTION_UPGRADE:
-          EXTRA_CHECK (0);
-          break;
-#endif /* UPGRADE_SUPPORT */
-        default:
-          EXTRA_CHECK (0);
-	  CONNECTION_CLOSE_ERROR (connection,
-                                  _("Internal error\n"));
-          return MHD_YES;
         }
+      if (connection->response_write_position ==
+          connection->response->total_size)
+        connection->state = MHD_CONNECTION_FOOTERS_SENT; /* have no footers */
+      return;
+    case MHD_CONNECTION_NORMAL_BODY_UNREADY:
+      mhd_assert (0);
+      return;
+    case MHD_CONNECTION_CHUNKED_BODY_READY:
+      ret = connection->send_cls (connection,
+                                  &connection->write_buffer
+                                  [connection->write_buffer_send_offset],
+                                  connection->write_buffer_append_offset -
+                                    connection->write_buffer_send_offset);
+      if (ret < 0)
+        {
+          if (MHD_ERR_AGAIN_ == ret)
+            return;
+          CONNECTION_CLOSE_ERROR (connection,
+                                  _("Connection was closed while sending response body.\n"));
+          return;
+        }
+      connection->write_buffer_send_offset += ret;
+      MHD_update_last_activity_ (connection);
+      if (MHD_CONNECTION_CHUNKED_BODY_READY != connection->state)
+        return;
+      check_write_done (connection,
+                        (connection->response->total_size ==
+                         connection->response_write_position) ?
+                        MHD_CONNECTION_BODY_SENT :
+                        MHD_CONNECTION_CHUNKED_BODY_UNREADY);
+      return;
+    case MHD_CONNECTION_CHUNKED_BODY_UNREADY:
+    case MHD_CONNECTION_BODY_SENT:
+      mhd_assert (0);
+      return;
+    case MHD_CONNECTION_FOOTERS_SENDING:
+      ret = connection->send_cls (connection,
+                                  &connection->write_buffer
+                                  [connection->write_buffer_send_offset],
+                                  connection->write_buffer_append_offset -
+                                    connection->write_buffer_send_offset);
+      if (ret < 0)
+        {
+          if (MHD_ERR_AGAIN_ == ret)
+            return;
+          CONNECTION_CLOSE_ERROR (connection,
+                                  _("Connection was closed while sending response body.\n"));
+          return;
+        }
+      connection->write_buffer_send_offset += ret;
+      MHD_update_last_activity_ (connection);
+      if (MHD_CONNECTION_FOOTERS_SENDING != connection->state)
+        return;
+      check_write_done (connection,
+                        MHD_CONNECTION_FOOTERS_SENT);
+      return;
+    case MHD_CONNECTION_FOOTERS_SENT:
+      mhd_assert (0);
+      return;
+    case MHD_CONNECTION_CLOSED:
+      return;
+    case MHD_CONNECTION_IN_CLEANUP:
+      mhd_assert (0);
+      return;
+#ifdef UPGRADE_SUPPORT
+    case MHD_CONNECTION_UPGRADE:
+      mhd_assert (0);
+      return;
+#endif /* UPGRADE_SUPPORT */
+    default:
+      mhd_assert (0);
+      CONNECTION_CLOSE_ERROR (connection,
+                              _("Internal error\n"));
       break;
     }
-  return MHD_YES;
+  return;
 }
 
 
@@ -2820,17 +3015,6 @@ cleanup_connection (struct MHD_Connection *connection)
       connection->response = NULL;
     }
   MHD_mutex_lock_chk_ (&daemon->cleanup_connection_mutex);
-  if (0 == (daemon->options & MHD_USE_THREAD_PER_CONNECTION))
-    {
-      if (connection->connection_timeout == daemon->connection_timeout)
-        XDLL_remove (daemon->normal_timeout_head,
-                     daemon->normal_timeout_tail,
-                     connection);
-      else
-        XDLL_remove (daemon->manual_timeout_head,
-                     daemon->manual_timeout_tail,
-                     connection);
-    }
   if (connection->suspended)
     {
       DLL_remove (daemon->suspended_connections_head,
@@ -2840,6 +3024,17 @@ cleanup_connection (struct MHD_Connection *connection)
     }
   else
     {
+      if (0 == (daemon->options & MHD_USE_THREAD_PER_CONNECTION))
+        {
+          if (connection->connection_timeout == daemon->connection_timeout)
+            XDLL_remove (daemon->normal_timeout_head,
+                         daemon->normal_timeout_tail,
+                         connection);
+          else
+            XDLL_remove (daemon->manual_timeout_head,
+                         daemon->manual_timeout_tail,
+                         connection);
+        }
       DLL_remove (daemon->connections_head,
                   daemon->connections_tail,
                   connection);
@@ -2888,6 +3083,14 @@ MHD_connection_handle_idle (struct MHD_Connection *connection)
   connection->in_idle = true;
   while (! connection->suspended)
     {
+#ifdef HTTPS_SUPPORT
+      if (MHD_TLS_CONN_NO_TLS != connection->tls_state)
+        { /* HTTPS connection. */
+          if ((MHD_TLS_CONN_INIT <= connection->tls_state) &&
+              (MHD_TLS_CONN_CONNECTED > connection->tls_state))
+            break;
+        }
+#endif /* HTTPS_SUPPORT */
 #if DEBUG_STATES
       MHD_DLOG (daemon,
                 _("In function %s handling connection at state: %s\n"),
@@ -3146,14 +3349,11 @@ MHD_connection_handle_idle (struct MHD_Connection *connection)
 #ifdef UPGRADE_SUPPORT
           if (NULL != connection->response->upgrade_handler)
             {
-              struct MHD_Response *resp_clr = connection->response;
-
               socket_start_normal_buffering (connection);
               connection->state = MHD_CONNECTION_UPGRADE;
-              connection->response = NULL;
               /* This connection is "upgraded".  Pass socket to application. */
               if (MHD_YES !=
-                  MHD_response_execute_upgrade_ (resp_clr,
+                  MHD_response_execute_upgrade_ (connection->response,
                                                  connection))
                 {
                   /* upgrade failed, fail hard */
@@ -3162,8 +3362,12 @@ MHD_connection_handle_idle (struct MHD_Connection *connection)
                   continue;
                 }
               /* Response is not required anymore for this connection. */
-              if (NULL != resp_clr)
-                MHD_destroy_response (resp_clr);
+              if (NULL != connection->response)
+                {
+                  struct MHD_Response * const resp = connection->response;
+                  connection->response = NULL;
+                  MHD_destroy_response (resp);
+                }
               continue;
             }
 #endif /* UPGRADE_SUPPORT */
@@ -3327,6 +3531,7 @@ MHD_connection_handle_idle (struct MHD_Connection *connection)
           continue;
         case MHD_CONNECTION_CLOSED:
 	  cleanup_connection (connection);
+          connection->in_idle = false;
 	  return MHD_NO;
 #ifdef UPGRADE_SUPPORT
 	case MHD_CONNECTION_UPGRADE:
@@ -3334,7 +3539,7 @@ MHD_connection_handle_idle (struct MHD_Connection *connection)
           return MHD_YES; /* keep open */
 #endif /* UPGRADE_SUPPORT */
        default:
-          EXTRA_CHECK (0);
+          mhd_assert (0);
           break;
         }
       break;
@@ -3423,9 +3628,8 @@ MHD_connection_epoll_update_ (struct MHD_Connection *connection)
 void
 MHD_set_http_callbacks_ (struct MHD_Connection *connection)
 {
-  connection->read_handler = &MHD_connection_handle_read;
-  connection->write_handler = &MHD_connection_handle_write;
-  connection->idle_handler = &MHD_connection_handle_idle;
+  connection->recv_cls = &recv_param_adapter;
+  connection->send_cls = &send_param_adapter;
 }
 
 
@@ -3471,7 +3675,8 @@ MHD_get_connection_info (struct MHD_Connection *connection,
     case MHD_CONNECTION_INFO_SOCKET_CONTEXT:
       return (const union MHD_ConnectionInfo *) &connection->socket_context;
     case MHD_CONNECTION_INFO_CONNECTION_SUSPENDED:
-      return (const union MHD_ConnectionInfo *) &connection->suspended;
+      connection->suspended_dummy = connection->suspended ? MHD_YES : MHD_NO;
+      return (const union MHD_ConnectionInfo *) &connection->suspended_dummy;
     case MHD_CONNECTION_INFO_CONNECTION_TIMEOUT:
       connection->connection_timeout_dummy = (unsigned int)connection->connection_timeout;
       return (const union MHD_ConnectionInfo *) &connection->connection_timeout_dummy;

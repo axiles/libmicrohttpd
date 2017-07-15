@@ -30,6 +30,8 @@
 #include "mhd_options.h"
 #include "platform.h"
 #include "microhttpd.h"
+#include "mhd_assert.h"
+
 #ifdef HTTPS_SUPPORT
 #include <gnutls/gnutls.h>
 #if GNUTLS_VERSION_MAJOR >= 3
@@ -510,25 +512,32 @@ enum MHD_CONNECTION_STATE
    */
   MHD_CONNECTION_IN_CLEANUP = MHD_CONNECTION_CLOSED + 1,
 
-  /*
-   *  SSL/TLS connection states
-   */
-
-  /**
-   * The initial connection state for all secure connectoins
-   * Handshake messages will be processed in this state & while
-   * in the #MHD_TLS_HELLO_REQUEST state
-   */
-  MHD_TLS_CONNECTION_INIT = MHD_CONNECTION_IN_CLEANUP + 1,
-
 #ifdef UPGRADE_SUPPORT
   /**
    * Connection was "upgraded" and socket is now under the
    * control of the application.
    */
-  MHD_CONNECTION_UPGRADE = MHD_TLS_CONNECTION_INIT + 1,
+  MHD_CONNECTION_UPGRADE
 #endif /* UPGRADE_SUPPORT */
 
+};
+
+
+/**
+ * States of TLS transport layer.
+ */
+enum MHD_TLS_CONN_STATE
+{
+  MHD_TLS_CONN_NO_TLS = 0,  /**< Not a TLS connection (plain socket).   */
+  MHD_TLS_CONN_INIT,        /**< TLS connection is not established yet. */
+  MHD_TLS_CONN_HANDSHAKING, /**< TLS is in handshake process.           */
+  MHD_TLS_CONN_CONNECTED,   /**< TLS is established.                    */
+  MHD_TLS_CONN_WR_CLOSING,  /**< Closing WR side of TLS layer.          */
+  MHD_TLS_CONN_WR_CLOSED,   /**< WR side of TLS layer is closed.        */
+  MHD_TLS_CONN_TLS_CLOSING, /**< TLS session is terminating.            */
+  MHD_TLS_CONN_TLS_CLOSED,  /**< TLS session is terminated.             */
+  MHD_TLS_CONN_TLS_FAILED,  /**< TLS session failed.                    */
+  MHD_TLS_CONN_INVALID_STATE/**< Sentinel. Not a valid value.           */
 };
 
 /**
@@ -568,7 +577,7 @@ typedef ssize_t
  */
 typedef ssize_t
 (*TransmitCallback) (struct MHD_Connection *conn,
-                     const void *write_to,
+                     const void *read_from,
                      size_t max_bytes);
 
 
@@ -797,13 +806,13 @@ struct MHD_Connection
    */
   uint64_t response_write_position;
 
-#if LINUX
+#ifdef __linux__
   enum MHD_resp_sender_
   {
     MHD_resp_sender_std = 0,
     MHD_resp_sender_sendfile
   } resp_sender;
-#endif /* LINUX */
+#endif /* __linux__ */
 
   /**
    * Position in the 100 CONTINUE message that
@@ -924,24 +933,6 @@ struct MHD_Connection
   uint64_t current_chunk_offset;
 
   /**
-   * Handler used for processing read connection operations
-   * @sa #MHD_connection_handle_read, #MHD_tls_connection_handle_read
-   */
-  int (*read_handler) (struct MHD_Connection *connection);
-
-  /**
-   * Handler used for processing write connection operations
-   * @sa #MHD_connection_handle_write, #MHD_tls_connection_handle_write
-   */
-  int (*write_handler) (struct MHD_Connection *connection);
-
-  /**
-   * Handler used for processing idle connection operations
-   * @sa #MHD_connection_handle_idle, #MHD_tls_connection_handle_idle
-   */
-  int (*idle_handler) (struct MHD_Connection *connection);
-
-  /**
    * Function used for reading HTTP request stream.
    */
   ReceiveCallback recv_cls;
@@ -979,21 +970,26 @@ struct MHD_Connection
   int cipher;
 
   /**
+   * State of connection's TLS layer
+   */
+  enum MHD_TLS_CONN_STATE tls_state;
+
+  /**
    * Could it be that we are ready to read due to TLS buffers
    * even though the socket is not?
    */
   bool tls_read_ready;
-
-  /**
-   * TLS layer was shut down?
-   */
-  bool tls_closed;
 #endif /* HTTPS_SUPPORT */
 
   /**
    * Is the connection suspended?
    */
   bool suspended;
+
+  /**
+   * Special member to be returned by #MHD_get_connection_info()
+   */
+  int suspended_dummy;
 
   /**
    * Is the connection wanting to resume?
@@ -1703,13 +1699,6 @@ struct MHD_Daemon
 };
 
 
-#if EXTRA_CHECKS
-#define EXTRA_CHECK(a) do { if (!(a)) abort(); } while (0)
-#else
-#define EXTRA_CHECK(a)
-#endif
-
-
 /**
  * Insert an element at the head of a DLL. Assumes that head, tail and
  * element are structs with prev and next fields.
@@ -1719,8 +1708,8 @@ struct MHD_Daemon
  * @param element element to insert
  */
 #define DLL_insert(head,tail,element) do { \
-  EXTRA_CHECK (NULL == (element)->next); \
-  EXTRA_CHECK (NULL == (element)->prev); \
+  mhd_assert (NULL == (element)->next); \
+  mhd_assert (NULL == (element)->prev); \
   (element)->next = (head); \
   (element)->prev = NULL; \
   if ((tail) == NULL) \
@@ -1740,8 +1729,8 @@ struct MHD_Daemon
  * @param element element to remove
  */
 #define DLL_remove(head,tail,element) do { \
-  EXTRA_CHECK ( (NULL != (element)->next) || ((element) == (tail)));  \
-  EXTRA_CHECK ( (NULL != (element)->prev) || ((element) == (head)));  \
+  mhd_assert ( (NULL != (element)->next) || ((element) == (tail)));  \
+  mhd_assert ( (NULL != (element)->prev) || ((element) == (head)));  \
   if ((element)->prev == NULL) \
     (head) = (element)->next;  \
   else \
@@ -1764,8 +1753,8 @@ struct MHD_Daemon
  * @param element element to insert
  */
 #define XDLL_insert(head,tail,element) do { \
-  EXTRA_CHECK (NULL == (element)->nextX); \
-  EXTRA_CHECK (NULL == (element)->prevX); \
+  mhd_assert (NULL == (element)->nextX); \
+  mhd_assert (NULL == (element)->prevX); \
   (element)->nextX = (head); \
   (element)->prevX = NULL; \
   if (NULL == (tail)) \
@@ -1785,8 +1774,8 @@ struct MHD_Daemon
  * @param element element to remove
  */
 #define XDLL_remove(head,tail,element) do { \
-  EXTRA_CHECK ( (NULL != (element)->nextX) || ((element) == (tail)));  \
-  EXTRA_CHECK ( (NULL != (element)->prevX) || ((element) == (head)));  \
+  mhd_assert ( (NULL != (element)->nextX) || ((element) == (tail)));  \
+  mhd_assert ( (NULL != (element)->prevX) || ((element) == (head)));  \
   if (NULL == (element)->prevX) \
     (head) = (element)->nextX;  \
   else \
@@ -1872,7 +1861,7 @@ typedef int
  *
  * @param kind header kind to pass to @a cb
  * @param connection connection to add headers to
- * @param[in|out] args argument URI string (after "?" in URI),
+ * @param[in,out] args argument URI string (after "?" in URI),
  *        clobbered in the process!
  * @param cb function to call on each key-value pair found
  * @param[out] num_headers set to the number of headers found
@@ -1921,5 +1910,16 @@ MHD_check_response_header_token_ci (const struct MHD_Response *response,
 #define MHD_check_response_header_s_token_ci(r,k,tkn) \
     MHD_check_response_header_token_ci((r),(k),(tkn),MHD_STATICSTR_LEN_(tkn))
 
+/**
+ * Internal version of ::MHD_suspend_connection().
+ *
+ * @remark In thread-per-connection mode: can be called from any thread,
+ * in any other mode: to be called only from thread that process
+ * daemon's select()/poll()/etc.
+ *
+ * @param connection the connection to suspend
+ */
+void
+internal_suspend_connection_ (struct MHD_Connection *connection);
 
 #endif

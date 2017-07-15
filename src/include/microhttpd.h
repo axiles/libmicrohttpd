@@ -126,7 +126,7 @@ typedef intptr_t ssize_t;
  * Current version of the library.
  * 0x01093001 = 1.9.30-1.
  */
-#define MHD_VERSION 0x00095400
+#define MHD_VERSION 0x00095502
 
 /**
  * MHD-internal return code for "YES".
@@ -1845,7 +1845,15 @@ enum MHD_DaemonInfoType
    * Note: flags may differ from original 'flags' specified for
    * daemon, especially if #MHD_USE_AUTO was set.
    */
-  MHD_DAEMON_INFO_FLAGS
+  MHD_DAEMON_INFO_FLAGS,
+
+  /**
+   * Request the port number of daemon's listen socket.
+   * No extra arguments should be passed.
+   * Note: if port '0' was specified for #MHD_start_daemon(), returned
+   * value will be real port number.
+   */
+  MHD_DAEMON_INFO_BIND_PORT
 };
 
 
@@ -1901,10 +1909,10 @@ typedef int
  *        part of #MHD_get_connection_values; very large POST
  *        data *will* be made available incrementally in
  *        @a upload_data)
- * @param upload_data_size set initially to the size of the
+ * @param[in,out] upload_data_size set initially to the size of the
  *        @a upload_data provided; the method must update this
  *        value to the number of bytes NOT processed;
- * @param con_cls pointer that the callback can set to some
+ * @param[in,out] con_cls pointer that the callback can set to some
  *        address and that will be preserved by MHD for future
  *        calls for this request; since the access handler may
  *        be called many times (i.e., for a PUT/POST operation
@@ -2095,7 +2103,11 @@ typedef int
  * Start a webserver on the given port.
  *
  * @param flags combination of `enum MHD_FLAG` values
- * @param port port to bind to (in host byte order)
+ * @param port port to bind to (in host byte order),
+ *        use '0' to bind to random free port,
+ *        ignored if MHD_OPTION_SOCK_ADDR or
+ *        MHD_OPTION_LISTEN_SOCKET is provided
+ *        or MHD_USE_NO_LISTEN_SOCKET is specified
  * @param apc callback to call to check which clients
  *        will be allowed to connect; you can pass NULL
  *        in which case connections from any IP will be
@@ -2121,7 +2133,11 @@ MHD_start_daemon_va (unsigned int flags,
  * #MHD_start_daemon_va.
  *
  * @param flags combination of `enum MHD_FLAG` values
- * @param port port to bind to
+ * @param port port to bind to (in host byte order),
+ *        use '0' to bind to random free port,
+ *        ignored if MHD_OPTION_SOCK_ADDR or
+ *        MHD_OPTION_LISTEN_SOCKET is provided
+ *        or MHD_USE_NO_LISTEN_SOCKET is specified
  * @param apc callback to call to check which clients
  *        will be allowed to connect; you can pass NULL
  *        in which case connections from any IP will be
@@ -2188,8 +2204,6 @@ MHD_stop_daemon (struct MHD_Daemon *daemon);
  * The given client socket will be managed (and closed!) by MHD after
  * this call and must no longer be used directly by the application
  * afterwards.
- *
- * Per-IP connection limits are ignored when using this API.
  *
  * @param daemon daemon that manages the connection
  * @param client_socket socket to manage (MHD will expect
@@ -2840,6 +2854,9 @@ MHD_upgrade_action (struct MHD_UpgradeResponseHandle *urh,
  * but instead use #MHD_upgrade_action() for special operations
  * on @a sock.
  *
+ * Data forwarding to "upgraded" @a sock will be started as soon
+ * as this function return.
+ *
  * Except when in 'thread-per-connection' mode, implementations
  * of this function should never block (as it will still be called
  * from within the main event loop).
@@ -3239,6 +3256,11 @@ union MHD_DaemonInfo
   MHD_socket listen_fd;
 
   /**
+   * Bind port number, returned for #MHD_DAEMON_INFO_BIND_PORT.
+   */
+  uint16_t port;
+
+  /**
    * epoll FD, returned for #MHD_DAEMON_INFO_EPOLL_FD.
    */
   int epoll_fd;
@@ -3424,7 +3446,20 @@ enum MHD_FEATURE
    * It's always safe to use same file FD in multiple responses if MHD
    * is run in any single thread mode.
    */
-  MHD_FEATURE_RESPONSES_SHARED_FD = 18
+  MHD_FEATURE_RESPONSES_SHARED_FD = 18,
+
+  /**
+   * Get whether MHD support automatic detection of bind port number.
+   * @sa #MHD_DAEMON_INFO_BIND_PORT
+   */
+  MHD_FEATURE_AUTODETECT_BIND_PORT = 19,
+
+  /**
+   * Get whether MHD support SIGPIPE suppression.
+   * If SIGPIPE suppression is not supported, application must handle
+   * SIGPIPE signal by itself.
+   */
+  MHD_FEATURE_AUTOSUPPRESS_SIGPIPE = 20
 };
 
 

@@ -1,3 +1,79 @@
+Thu Jul 13 21:41:00 MSK 2017
+	Restored SIGPIPE suppression in TLS mode.
+	Added new value MHD_FEATURE_AUTOSUPPRESS_SIGPIPE so application could
+	check whether SIGPIPE handling is required.
+	Used GNUTLS_NONBLOCK for TLS sessions. -EG
+
+Tue Jun 20 23:52:00 MSK 2017
+	Libgcrypt is now optional and required only for old GnuTLS versions. -EG
+
+Wed Jun 14 21:42:00 MSK 2017
+	Added support for debug assert() and new configure parameter 
+	--enable-asserts for debug builds.
+	Removed non-functional Symbian support. -EG
+
+Mon Jun 05 23:34:00 MSK 2017
+	More internal refactoring:
+	merged MHD_tls_connection_handle_read/write() with non-TLS version,
+	reduced and unified number of layers for network processing (before
+	refactoring MHD_tls_connection_handle_read->MHD_connection_handle_read->
+	do_read->recv_tls_adapter->GnuTLS->recv_param_adapter - 5 MHD layers;
+	after refactoring MHD_connection_handle_read->recv_tls_adapter->GnuTLS -
+	2 MHD layers),
+	simplified and removed dead code from
+	MHD_connection_handle_read/write() without functional change. -EG
+
+Mon Jun 05 22:20:00 MSK 2017
+	Internal refactoring:
+	used TCP sockets directly with GnuTLS (performance improvement),
+	moved some connection-related code from daemon.c to 
+	connection.c/connection_https.c,
+	removed hacks around sendfile() and implemented correct support of
+	sendfile(),
+	removed do_read() and do_write() to reduce number of layer around send()
+	and recv() and to improve readability and maintainability of code,
+	implemented separate tracking of TLS layer state, independent of HTTP
+	connection stage. -EG
+
+Sun Jun 04 15:02:00 MSK 2017
+	Improved thread-safety of MHD_add_connection() and
+	internal_add_connection(), minor optimisations. -EG
+
+Sun May 28 23:26:00 MSK 2017
+	Releasing GNU libmicrohttpd 0.9.55. -EG
+
+Sun May 21 18:48:00 MSK 2017
+	Fixed build with disabled "UPGRADE".
+	Fixed possible null-dereference in HTTPS test.
+	Fixed compiler warning in process_request_body(), minor optimizations.
+	Do not allow suspend of "upgraded" connections.
+	Fixed returned value for MHD_CONNECTION_INFO_CONNECTION_SUSPENDED.
+	Fixed removal from timeout lists of non-existing connections in
+	cleanup_connection().
+	Fixed double locking of mutex. -EG
+
+Sun May 14 15:05:00 MSK 2017
+	Fixed resuming connections and closing upgraded connections in select()
+	mode with thread-per-connection. -EG
+
+Sun May 14 14:49:00 MSK 2017
+	Removed extra call to resume connections in MHD_run().
+	Handle resumed connection without delay in epoll mode.
+	Update states of resumed connection after resume in thread-per-connection
+	mode.
+	Fixed resuming connections and closing upgraded connections in poll()
+	mode with thread-per-connection. -EG
+
+Thu May 11 22:37:00 MSK 2017
+	Faster start really processing data in resumed connections. -EG
+
+Thu May 11 14:24:00 MSK 2017
+	Do not add any "Connection" headers for "upgrade" connections. -EG
+
+Wed May 10 23:09:00 MSK 2017
+	Resume resuming connection before other processing in external polling 
+	mode. -EG
+
 Tue May  9 23:16:00 MSK 2017
 	Fixed: Do not add "Connection: Keep-Alive" header for "upgrade"
 	connections. -EG
