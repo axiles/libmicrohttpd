@@ -3116,7 +3116,7 @@ MHD_get_timeout (struct MHD_Daemon *daemon,
     {
       const time_t second_left = earliest_deadline - now;
       /* 'second_left' is always positive. */
-      if (((unsigned int) second_left) > ULLONG_MAX / 1000)
+      if (((MHD_UNSIGNED_LONG_LONG) second_left) > ULLONG_MAX / 1000)
         *timeout = ULLONG_MAX;
       else
         *timeout = 1000LL * second_left;
@@ -4580,6 +4580,8 @@ parse_options_va (struct MHD_Daemon *daemon,
   struct MHD_OptionItem *oa;
   unsigned int i;
   unsigned int uv;
+  MHD_UNSIGNED_LONG_LONG uv_long_long;
+  MHD_UNSIGNED_LONG_LONG pool_size_tmp;
 #ifdef HTTPS_SUPPORT
   int ret;
   const char *pstr;
@@ -4604,7 +4606,8 @@ parse_options_va (struct MHD_Daemon *daemon,
         case MHD_OPTION_CONNECTION_TIMEOUT:
           uv = va_arg (ap,
                        unsigned int);
-          if (TIME_T_MAX < uv)
+          uv_long_long = uv;
+          if (TIME_T_MAX < uv_long_long)
             {
 #ifdef HAVE_MESSAGES
               MHD_DLOG (daemon,
@@ -4644,6 +4647,7 @@ parse_options_va (struct MHD_Daemon *daemon,
         case MHD_OPTION_THREAD_POOL_SIZE:
           daemon->worker_pool_size = va_arg (ap,
                                              unsigned int);
+          pool_size_tmp = daemon->worker_pool_size;
           if (0 == daemon->worker_pool_size)
             {
 #ifdef HAVE_MESSAGES
@@ -4661,7 +4665,7 @@ parse_options_va (struct MHD_Daemon *daemon,
 #endif
               daemon->worker_pool_size = 0;
             }
-          else if (daemon->worker_pool_size >= (SIZE_MAX / sizeof (struct MHD_Daemon)))
+          else if (pool_size_tmp >= (SIZE_MAX / sizeof (struct MHD_Daemon)))
 	    {
 #ifdef HAVE_MESSAGES
 	      MHD_DLOG (daemon,
