@@ -29,7 +29,7 @@ string_to_base64 (const char *message)
   const char *lookup =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   unsigned long l;
-  int i;
+  unsigned int i;
   char *tmp;
   size_t length = strlen (message);
 
@@ -89,7 +89,7 @@ load_file (const char *filename)
 {
   FILE *fp;
   char *buffer;
-  long size;
+  unsigned long size;
 
   size = get_file_size (filename);
   if (0 == size)

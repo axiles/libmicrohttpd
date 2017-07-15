@@ -3115,7 +3115,8 @@ MHD_get_timeout (struct MHD_Daemon *daemon,
   else
     {
       const time_t second_left = earliest_deadline - now;
-      if (second_left > ULLONG_MAX / 1000) /* Ignore compiler warning: 'second_left' is always positive. */
+      /* 'second_left' is always positive. */
+      if (((unsigned int) second_left) > ULLONG_MAX / 1000)
         *timeout = ULLONG_MAX;
       else
         *timeout = 1000LL * second_left;
